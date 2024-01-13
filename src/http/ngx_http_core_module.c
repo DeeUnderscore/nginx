@@ -1707,8 +1707,7 @@ ngx_http_set_etag(ngx_http_request_t *r)
         && real[NIX_STORE_LEN] == '/'
         && real[NIX_STORE_LEN + 1] != '\0')
     {
-        ptr1 = real + NIX_STORE_LEN;
-        *ptr1 = '"';
+        ptr1 = real + NIX_STORE_LEN + 1;
 
         ptr2 = (u_char *) ngx_strchr(ptr1, '-');
 
@@ -1718,11 +1717,9 @@ ngx_http_set_etag(ngx_http_request_t *r)
             return NGX_ERROR;
         }
 
-        *ptr2++ = '"';
         *ptr2 = '\0';
 
-        etag->value.len = ngx_strlen(ptr1);
-        etag->value.data = ngx_pnalloc(r->pool, etag->value.len);
+        etag->value.data = ngx_pnalloc(r->pool, NGX_OFF_T_LEN + ngx_strlen(ptr1) + 3);
 
         if (etag->value.data == NULL) {
             ngx_free(real);
@@ -1730,7 +1727,11 @@ ngx_http_set_etag(ngx_http_request_t *r)
             return NGX_ERROR;
         }
 
-        ngx_memcpy(etag->value.data, ptr1, etag->value.len);
+        etag->value.len = ngx_sprintf(etag->value.data, "\"\%s-%xO\"",
+                                      ptr1,
+                                      r->headers_out.content_length_n)
+                          - etag->value.data;
+
         ngx_http_clear_last_modified(r);
     } else {
         etag->value.data = ngx_pnalloc(r->pool, NGX_OFF_T_LEN + NGX_TIME_T_LEN + 3);
