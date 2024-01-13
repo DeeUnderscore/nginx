@@ -1694,6 +1694,17 @@ ngx_http_set_etag(ngx_http_request_t *r)
     etag->next = NULL;
     ngx_str_set(&etag->key, "ETag");
 
+    // Upstream nginx uses file mod timestamp and content-length for Etag, but
+    // files in the Nix store have their timestamps reset, so that doesn't work.
+    // Instead, when serving from the Nix store, we use the hash from the store
+    // path and content-length.
+    //
+    // Every file in under the given store path will share the same store path
+    // hash. It is fine to serve different resources with the same Etag, but
+    // different representations of the same resource (eg the same file, but
+    // gzip-compressed) should have different Etags. Thus, we also append
+    // content-length, which should be different when the response is compressed
+
     err = ngx_errno;
     real = ngx_realpath(clcf->root.data, NULL);
     ngx_set_errno(err);
@@ -1707,6 +1718,9 @@ ngx_http_set_etag(ngx_http_request_t *r)
         && real[NIX_STORE_LEN] == '/'
         && real[NIX_STORE_LEN + 1] != '\0')
     {
+        // extract the hash from a path formatted like
+        // /nix/store/hashhere1234-pname-1.0.0
+        // +1 to skip the leading /
         ptr1 = real + NIX_STORE_LEN + 1;
 
         ptr2 = (u_char *) ngx_strchr(ptr1, '-');
@@ -1719,7 +1733,9 @@ ngx_http_set_etag(ngx_http_request_t *r)
 
         *ptr2 = '\0';
 
-        etag->value.data = ngx_pnalloc(r->pool, NGX_OFF_T_LEN + ngx_strlen(ptr1) + 3);
+        // hash + content-length + quotes and hyphen. Note that the
+        // content-length part of the string can vary in length.
+        etag->value.data = ngx_pnalloc(r->pool, ngx_strlen(ptr1) + NGX_OFF_T_LEN + 3);
 
         if (etag->value.data == NULL) {
             ngx_free(real);
@@ -1727,6 +1743,9 @@ ngx_http_set_etag(ngx_http_request_t *r)
             return NGX_ERROR;
         }
 
+
+        // set value.data content to "{hash}-{content-length}" (including quote
+        // marks), and set value.len to the length of the resulting string
         etag->value.len = ngx_sprintf(etag->value.data, "\"\%s-%xO\"",
                                       ptr1,
                                       r->headers_out.content_length_n)
@@ -1734,6 +1753,8 @@ ngx_http_set_etag(ngx_http_request_t *r)
 
         ngx_http_clear_last_modified(r);
     } else {
+        // outside of Nix store, use the upstream Nginx logic for etags
+
         etag->value.data = ngx_pnalloc(r->pool, NGX_OFF_T_LEN + NGX_TIME_T_LEN + 3);
 
         if (etag->value.data == NULL) {
